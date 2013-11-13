@@ -12,34 +12,30 @@
 /******************************************************************************
 	エントリポイント
 ******************************************************************************/
-int main(int argc, char** argv)
+int wmain(int argc, wchar_t* argv[])
 {
-	using namespace hm::archiver;
-
-	std::vector<char> buffer(1024);
-
-	try
+	if(argc < 2 || argc > 3)
 	{
-		SimpleArchiver archiver("test");
-		archiver.WriteArchive("test.arc");
-
-		SimpleArchiver reader("test.arc");
-
-		reader.ReadFile(&buffer.front(), "text.txt");
-	}
-	catch(const std::runtime_error& e)
-	{
-		std::cout << e.what() << std::endl;
+		std::wcout
+			<< std::endl
+			<< L"usage: SimpleArchiver src dest"
+			<< std::endl;
 		exit(0);
 	}
 
-	for(const auto& dest : buffer)
-	{
-		std::cout << dest;
-	}
-	std::cout << std::endl;
+	using namespace hm::archiver;
 
-	std::cin >> buffer.front();
+	std::wstring src(argv[1]);
+	std::wstring dest(argv[2]);
+
+	try
+	{
+		SimpleArchiver archiver(src);
+	}
+	catch(const std::runtime_error& e)
+	{
+		std::wcout << e.what() << std::endl;
+	}
 
 	return 0;
 }

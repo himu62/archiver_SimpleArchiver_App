@@ -20,17 +20,19 @@ namespace archiver
 	関数
 ******************************************************************************/
 
-std::map<std::string, std::size_t> ConvertIndex(const std::string& archivePath)
+std::map<std::wstring, uintmax_t> ConvertIndex(const boost::filesystem::path& archivePath)
 {
 	assert(&archivePath);
 
-	std::ifstream in_stream(archivePath.c_str(), std::ios::in | std::ios::binary);
-	if(!in_stream)
+	namespace fs = boost::filesystem;
+
+	fs::ifstream in_stream(archivePath);
+	if(in_stream.fail())
 	{
-		throw std::runtime_error("アーカイブの読込みに失敗");
+		throw std::runtime_error("アーカイブの読み込みに失敗");
 	}
 
-	in_stream.seekg(0, std::ios::beg);
+	in_stream.seekg(0, fs::ifstream::beg);
 
 	std::vector<char> readData(4);
 	in_stream.read(&readData.front(), readData.size());
@@ -40,38 +42,40 @@ std::map<std::string, std::size_t> ConvertIndex(const std::string& archivePath)
 		throw std::runtime_error("アーカイブの読込みに失敗");
 	}
 
-	std::size_t indexSize;
+	uintmax_t indexSize;
 	in_stream.read(reinterpret_cast<char*>(&indexSize), sizeof(indexSize));
 
-	std::string indexBuffer(indexSize, '\0');
-	in_stream.read(&indexBuffer.front(), indexSize);
+	std::wstring indexBuffer(indexSize, '\0');
+	in_stream.read(reinterpret_cast<char*>(&indexBuffer.front()), indexSize);
 
-	const std::string delim(1, 0x1b);
-	std::vector<std::string> indexPieces = SplitString(indexBuffer, delim);
+	const std::wstring delim(1, 0x1b);
+	std::vector<std::wstring> indexPieces = SplitString(indexBuffer, delim);
 
-	std::map<std::string, std::size_t> destIndex;
+	std::map<std::wstring, uintmax_t> destIndex;
 	for(const auto& piece : indexPieces)
 	{
-		std::size_t fileBegin;
-		memcpy_s(reinterpret_cast<char*>(&fileBegin), sizeof(std::size_t), piece.substr(0, sizeof(std::size_t)).c_str(), sizeof(std::size_t));
+		uintmax_t fileBegin;
+		memcpy_s(reinterpret_cast<char*>(&fileBegin), sizeof(uintmax_t), piece.substr(0, sizeof(uintmax_t)).c_str(), sizeof(uintmax_t));
 
-		destIndex.insert(std::map<std::string, std::size_t>::value_type(piece.substr(2 * sizeof(std::size_t)), fileBegin));
+		destIndex.insert(std::map<std::wstring, uintmax_t>::value_type(piece.substr(2 * sizeof(uintmax_t)), fileBegin));
 	}
 
 	return destIndex;
 }
 
-bool IsArchive(const std::string& srcPath)
+bool IsArchive(const boost::filesystem::path& srcPath)
 {
 	assert(&srcPath);
 
-	std::ifstream in_stream(srcPath.c_str(), std::ios::in | std::ios::binary);
-	if(!in_stream)
+	namespace fs = boost::filesystem;
+
+	fs::ifstream in_stream(srcPath);
+	if(in_stream.fail())
 	{
 		return false;
 	}
 
-	in_stream.seekg(0, std::ios::beg);
+	in_stream.seekg(0, fs::ifstream::beg);
 
 	std::vector<char> data(4);
 	in_stream.read(&data.front(), data.size());
@@ -84,27 +88,45 @@ bool IsArchive(const std::string& srcPath)
 	return true;
 }
 
-std::map<std::string, std::size_t> SearchFiles(const std::string& srcPath)
+std::map<std::wstring, uintmax_t> SearchFiles(const boost::filesystem::path& srcPath)
 {
 	assert(&srcPath);
 
-	std::map<std::string, std::size_t> destIndex;
+	namespace fs = boost::filesystem;
 
+	std::map<std::wstring, uintmax_t> destIndex;
+
+	if(!fs::is_directory(srcPath))
+	{
+		destIndex[srcPath.wstring()] = fs::file_size(srcPath);
+	}
+	else
+	{
+		fs::recursive_directory_iterator end;
+		for(fs::recursive_directory_iterator i(srcPath); i != end; ++i)
+		{
+			const auto p = i->path();
+			if(!fs::is_directory(p))
+			{
+				destIndex[p.wstring()] = fs::file_size(p);
+			}
+		}
+	}
 
 	return destIndex;
 }
 
-std::vector<std::string> SplitString(const std::string& src, const std::string& delim)
+std::vector<std::wstring> SplitString(const std::wstring& src, const std::wstring& delim)
 {
 	assert(&src);
 	assert(&delim);
 
-	std::vector<std::string> destIndex;
+	std::vector<std::wstring> destIndex;
 
 	unsigned int begin = 0;
 	unsigned int next = src.find(delim.c_str(), begin);
 
-	while(next != std::string::npos)
+	while(next != std::wstring::npos)
 	{
 		destIndex.push_back(src.substr(begin, next));
 		begin += next;
@@ -119,48 +141,42 @@ std::vector<std::string> SplitString(const std::string& src, const std::string& 
 	SimpleArchiver
 ******************************************************************************/
 
-SimpleArchiver::SimpleArchiver(const std::string& srcPath) :
+SimpleArchiver::SimpleArchiver(const boost::filesystem::path& srcPath) :
 	isArchive_(IsArchive(srcPath)),
 	basePath_(srcPath),
 	index_(isArchive_ ? ConvertIndex(srcPath) : SearchFiles(srcPath))
 {}
 
-void SimpleArchiver::ReadFile(char* dest, const std::string& filePath) const
+void SimpleArchiver::ReadFile(char* dest, const std::wstring& filePath) const
 {
 	assert(dest);
 	assert(&filePath);
 
-	std::ifstream in_stream(filePath.c_str(), std::ios::in | std::ios::binary);
-	if(!in_stream)
+	namespace fs = boost::filesystem;
+
+	const auto p = fs::path(filePath);
+
+	fs::ifstream in_stream(p);
+	if(in_stream.fail())
 	{
-		try
-		{
-			throw std::runtime_error("Cannot read the file from the archive.");
-		}
-		catch(const std::runtime_error& e)
-		{
-			std::wcout << e.what() << std::endl;
-		}
+		throw std::runtime_error("ファイルの読込みに失敗");
 	}
+
+	
 
 
 }
 
-void SimpleArchiver::WriteArchive(const std::string& destPath) const
+void SimpleArchiver::WriteArchive(const boost::filesystem::path& destPath) const
 {
 	assert(&destPath);
 
-	std::ofstream out_stream(destPath.c_str(), std::ios::out | std::ios::binary | std::ios::trunc);
-	if(!out_stream)
+	namespace fs = boost::filesystem;
+
+	fs::ofstream out_stream(destPath);
+	if(out_stream.fail())
 	{
-		try
-		{
-			throw std::runtime_error("Cannot write to the file.");
-		}
-		catch(const std::runtime_error& e)
-		{
-			std::wcout << e.what() << std::endl;
-		}
+		throw std::runtime_error("ファイルの書込みに失敗");
 	}
 
 	/**************************************************************************
@@ -168,20 +184,20 @@ void SimpleArchiver::WriteArchive(const std::string& destPath) const
 		[SIGN][INDEX_SIZE][INDEX][DATA]
 
 			SIGN		: "ARCH" (4 bytes)
-			INDEX_SIZE	: [INDEX]部のサイズ (std::size_t, 8 bytes)
+			INDEX_SIZE	: [INDEX]部のサイズ (uintmax_t, 8 bytes)
 			INDEX		: ファイルインデックス(後述)
 			DATA		: データ
 
 		インデックスの構造
 		[BEGIN][SIZE][PATH][DELIM] [BEGIN][SIZE]... [PATH][DELIM]
 
-			BEGIN	: アーカイブ先頭からのオフセット (std::size_t, 8 bytes)
-			SIZE	: ファイルサイズ (std::size_t, 8 bytes)
+			BEGIN	: アーカイブ先頭からのオフセット (uintmax_t, 8 bytes)
+			SIZE	: ファイルサイズ (uintmax_t, 8 bytes)
 			PATH	: ファイルパス
 			DELIM	: デリミタ 0x1b (char, 1 bytes)
 	**************************************************************************/
 
-	out_stream.seekp(0, std::ios::beg);
+	out_stream.seekp(0, fs::ofstream::beg);
 
 	//****************************************************************************
 	// [SIGN]
@@ -191,7 +207,7 @@ void SimpleArchiver::WriteArchive(const std::string& destPath) const
 	// [INDEX_SIZE]
 	const char delim = 0x1b;
 
-	std::size_t indexSize = sizeof(index_) + (sizeof(std::size_t) + sizeof(delim)) * index_.size();
+	uintmax_t indexSize = sizeof(index_) + (sizeof(uintmax_t) + sizeof(delim)) * index_.size();
 	out_stream.write(reinterpret_cast<const char*>(&indexSize), sizeof(indexSize));
 
 	//****************************************************************************
@@ -200,10 +216,10 @@ void SimpleArchiver::WriteArchive(const std::string& destPath) const
 	{
 		out_stream.write(reinterpret_cast<const char*>(&piece.second), sizeof(piece.second));
 
-		std::size_t fileSize = GetFileSize(piece.first);
+		uintmax_t fileSize = GetFileSize(piece.first);
 		out_stream.write(reinterpret_cast<const char*>(&fileSize), sizeof(fileSize));
 
-		out_stream.write(piece.first.c_str(), piece.first.size());
+		out_stream.write(reinterpret_cast<const char*>(piece.first.c_str()), piece.first.size());
 		
 		out_stream.write(&delim, 1);
 	}
@@ -212,67 +228,55 @@ void SimpleArchiver::WriteArchive(const std::string& destPath) const
 	// [DATA]
 	for(const auto& piece : index_)
 	{
-		std::size_t fileSize = GetFileSize(piece.first);
+		const auto p = fs::path(piece.first);
 
-		// I/Oサイズ 8KB
-		std::vector<char> fileData(8192);
+		uintmax_t fileSize = fs::file_size(p);
 
-		std::ifstream in_stream(piece.first.c_str(), std::ios::in | std::ios::binary);
-		if(!in_stream)
+		fs::ifstream in_stream(p);
+		if(in_stream.fail())
 		{
-			try
-			{
-				throw std::runtime_error("Cannot write to the file.");
-			}
-			catch(const std::runtime_error& e)
-			{
-				std::wcout << e.what() << std::endl;
-			}
+			throw std::runtime_error("ファイルの書込みに失敗");
 		}
+		
+		in_stream.seekg(0, fs::ifstream::beg);
+		const auto inBeg = in_stream.tellg();
 
-		in_stream.seekg(0, std::ios::beg);
+		// I/Oサイズ: 1MB
+		std::vector<char> buffer(1024 * 1024);
 
-		std::size_t begin = 0;
-		while(begin <= fileSize)
+		while(true)
 		{
-			in_stream.read(&fileData.front(), fileData.size());
-			out_stream.write(&fileData.front(), fileData.size());
-			begin += fileData.size();
-		}
-		if(begin > fileSize)
-		{
-			unsigned int leftSize = static_cast<unsigned int>(begin - fileSize);
-			fileData.resize(leftSize);
+			const auto wroteSize = in_stream.tellg() - inBeg;
 
-			in_stream.read(&fileData.front(), fileData.size());
-			out_stream.write(&fileData.front(), fileData.size());
+			if(wroteSize >= fileSize)
+			{
+				break;
+			}
+			else if(wroteSize + buffer.size() > fileSize)
+			{
+				buffer.resize(static_cast<unsigned int>(fileSize - wroteSize));
+			}
+
+			in_stream.read(&buffer.front(), buffer.size());
+			out_stream.write(&buffer.front(), buffer.size());
 		}
 	}
 }
 
-std::size_t SimpleArchiver::GetFileSize(const std::string& filePath) const
+uintmax_t SimpleArchiver::GetFileSize(const std::wstring& filePath) const
 {
 	assert(&filePath);
 
-	std::ifstream in_stream(filePath.c_str(), std::ios::in | std::ios::binary);
-	if(!in_stream)
+	namespace fs = boost::filesystem;
+
+	const auto p = fs::path(filePath);
+
+	if(!fs::exists(p))
 	{
-		try
-		{
-			throw std::runtime_error("Cannot read the file.");
-		}
-		catch(const std::runtime_error& e)
-		{
-			std::wcout << e.what() << std::endl;
-		}
+		throw std::runtime_error("ファイルの読込みに失敗");
 	}
 
-	in_stream.seekg(0, std::ios::end);
-	const auto endPt = in_stream.tellg();
-	in_stream.seekg(0, std::ios::beg);
-	const auto begPt = in_stream.tellg();
-
-	return static_cast<std::size_t>(endPt - begPt);
+	return fs::file_size(p);
 }
 
 } // namespace archiver
