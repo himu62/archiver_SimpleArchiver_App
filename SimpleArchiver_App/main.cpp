@@ -24,6 +24,7 @@ int wmain(int argc, wchar_t* argv[])
 	}
 
 	using namespace hm::archiver;
+	namespace fs = boost::filesystem;
 
 	std::wstring src(argv[1]);
 	std::wstring dest(argv[2]);
@@ -31,10 +32,13 @@ int wmain(int argc, wchar_t* argv[])
 	try
 	{
 		SimpleArchiver archiver(src);
+		archiver.WriteArchive(fs::path(dest));
 	}
 	catch(const std::runtime_error& e)
 	{
 		std::wcout << e.what() << std::endl;
+		rewind(stdin);
+		getchar();
 	}
 
 	return 0;
