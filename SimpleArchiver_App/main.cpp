@@ -37,10 +37,10 @@ int wmain(int argc, wchar_t* argv[])
 		archiver.WriteArchive(fs::path(dest));
 
 		SimpleArchiver archive(dest);
-		std::vector<char> data(archive.GetFileSize("C:\\Applications\\7-zip\\readme.txt"));
-		archive.ReadFile(&data.front(), "C:\\Applications\\7-zip\\readme.txt");
+		std::vector<char> data(archive.GetFileSize(src + L"\\readme.txt"));
+		archive.ReadFile(&data.front(), src + L"\\readme.txt");
 
-		boost::filesystem::ofstream out_stream("C:\\Applications\\test.txt", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+		boost::filesystem::ofstream out_stream(dest.substr(0, dest.find(L'\\', 4)) + L"\\test.txt", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
  		out_stream.write(&data.front(), data.size());
 	}
 	catch(const std::runtime_error& e)

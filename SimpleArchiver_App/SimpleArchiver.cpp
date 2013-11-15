@@ -205,17 +205,18 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 
 	//****************************************************************************
 	// [INDEX_SIZE]
+	// issue: インデックスサイズが4バイト足りない
 	std::size_t indexSize = 0;
 	for(const auto& record : index_)
 	{
 		indexSize += sizeof(record.second);
-		indexSize += record.first.string().size();
+		indexSize += record.second.pathLength_;
 	}
 	out_stream.write(reinterpret_cast<const char*>(&indexSize), sizeof(indexSize));
 
 	//****************************************************************************
 	// [INDEX]
-	std::size_t begin = sign.size() + indexSize + 4;
+	std::size_t begin = sign.size() + indexSize;
 
 	for(const auto& record : index_)
 	{
