@@ -153,13 +153,25 @@ SimpleArchiver::SimpleArchiver(const fs::path& srcPath) :
 
 void SimpleArchiver::ReadFile(char* dest, const fs::path& filePath) const
 {
+	if(!isArchive_)
+	{
+		std::wcout << L"アーカイブではない" << std::endl;
+		return;
+	}
+
 	assert(dest);
 	assert(&filePath);
 
 	fs::ifstream in_stream(basePath_, std::ios_base::in | std::ios_base::binary);
 	if(in_stream.fail())
 	{
-		throw std::runtime_error("ファイルの読み込みに失敗");
+		throw std::runtime_error("アーカイブの読み込みに失敗");
+	}
+
+	if(!index_.count(filePath))
+	{
+		std::wcout << L"ファイルが見つからない" << std::endl;
+		return;
 	}
 
 	IndexItem item = index_.at(filePath.string());
@@ -170,6 +182,12 @@ void SimpleArchiver::ReadFile(char* dest, const fs::path& filePath) const
 
 void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 {
+	if(isArchive_)
+	{
+		std::wcout << L"アーカイブからアーカイブは生成できない" << std::endl;
+		return;
+	}
+
 	assert(&destPath);
 
 	fs::ofstream out_stream(destPath, std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
@@ -206,7 +224,7 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 	//****************************************************************************
 	// [INDEX_SIZE]
 	// issue: インデックスサイズが4バイト足りない
-	std::size_t indexSize = 0;
+	std::size_t indexSize = 4;
 	for(const auto& record : index_)
 	{
 		indexSize += sizeof(record.second);
