@@ -7,8 +7,6 @@
 #include "SimpleArchiver.hpp"
 
 #include <cassert>
-#include <fstream>
-#include <iostream>
 #include <stdexcept>
 
 #include <boost/filesystem/fstream.hpp>
@@ -24,6 +22,8 @@ namespace archiver
 	関数
 ******************************************************************************/
 
+//*****************************************************************************
+// アーカイブを読み込み，ファイルインデックスを生成する(mapの鍵はパス，値はアーカイブ先頭からの位置)
 std::map<fs::path, IndexItem> ConvertIndex(const fs::path& archivePath)
 {
 	assert(&archivePath);
@@ -44,30 +44,40 @@ std::map<fs::path, IndexItem> ConvertIndex(const fs::path& archivePath)
 		throw std::runtime_error("アーカイブの読込みに失敗");
 	}
 
-	uintmax_t indexSize;
+	std::size_t indexSize;
 	in_stream.read(reinterpret_cast<char*>(&indexSize), sizeof(indexSize));
 
-	std::string indexBuffer(indexSize, '\0');
-	in_stream.read(&indexBuffer.front(), indexSize);
-
-	const std::string delim(1, 0x1b);
-	std::vector<std::string> indexPieces = SplitString(indexBuffer, delim);
-
 	std::map<fs::path, IndexItem> destIndex;
-	for(const auto& piece : indexPieces)
+	for(unsigned int readSize = 0; readSize < indexSize; )
 	{
-		uintmax_t fileBegin;
-		memcpy_s(reinterpret_cast<char*>(&fileBegin), sizeof(uintmax_t), piece.substr(0, sizeof(uintmax_t)).c_str(), sizeof(uintmax_t));
+		std::size_t fileBegin;
+		in_stream.read(reinterpret_cast<char*>(&fileBegin), sizeof(fileBegin));
+		readSize += sizeof(fileBegin);
 
-		const fs::path filePath = fs::path(piece.substr(2 * sizeof(uintmax_t) - 1));
+		std::size_t fileSize;
+		in_stream.read(reinterpret_cast<char*>(&fileSize), sizeof(fileSize));
+		readSize += sizeof(fileSize);
 
-		IndexItem item(filePath, fileBegin);
+		unsigned int pathLength;
+		in_stream.read(reinterpret_cast<char*>(&pathLength), sizeof(pathLength));
+		readSize += sizeof(pathLength);
+
+		std::vector<char> pathBuffer(pathLength);
+		in_stream.read(&pathBuffer.front(), pathLength);
+		readSize += pathLength;
+
+		const fs::path filePath(pathBuffer);
+
+		IndexItem item(filePath, fileBegin, fileSize);
+
 		destIndex.insert(std::map<fs::path, IndexItem>::value_type(filePath, item));
-	}
+	}	
 
 	return destIndex;
 }
 
+//*****************************************************************************
+// パスがアーカイブか判定する
 bool IsArchive(const fs::path& srcPath)
 {
 	assert(&srcPath);
@@ -91,6 +101,8 @@ bool IsArchive(const fs::path& srcPath)
 	return true;
 }
 
+//*****************************************************************************
+// パス以下のファイルを探索してインデックスを生成する(サブディレクトリも探索)
 std::map<fs::path, IndexItem> SearchFiles(const fs::path& srcPath)
 {
 	assert(&srcPath);
@@ -119,35 +131,14 @@ std::map<fs::path, IndexItem> SearchFiles(const fs::path& srcPath)
 	return destIndex;
 }
 
-std::vector<std::string> SplitString(const std::string& src, const std::string& delim)
-{
-	assert(&src);
-	assert(&delim);
-
-	std::vector<std::string> destIndex;
-
-	unsigned int begin = 0;
-	unsigned int next = src.find(delim.c_str(), begin);
-
-	while(next != std::string::npos)
-	{
-		destIndex.push_back(src.substr(begin, next));
-		begin += next;
-		next = src.find(delim.c_str(), begin);
-	}
-
-	destIndex.push_back(src.substr(begin));
-
-	return destIndex;
-}
-
 /******************************************************************************
 	IndexItem
 ******************************************************************************/
 
-IndexItem::IndexItem(const fs::path& path, const uintmax_t begin) :
+IndexItem::IndexItem(const fs::path& path, const std::size_t begin, const std::size_t filesize) :
 	begin_(begin),
-	fileSize_(fs::exists(path) ? fs::file_size(path) : 0)
+	fileSize_(filesize ? filesize : static_cast<std::size_t>(fs::file_size(path))),
+	pathLength_(path.string().size())
 {}
 
 /******************************************************************************
@@ -191,57 +182,58 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 		アーカイブの構造
 		[SIGN][INDEX_SIZE][INDEX][DATA]
 
-			SIGN		: "ARCH" (4 bytes)
-			INDEX_SIZE	: [INDEX]部のサイズ (uintmax_t, 8 bytes)
+			SIGN		: "ARCH"
+			INDEX_SIZE	: [INDEX]部のサイズ
 			INDEX		: ファイルインデックス(後述)
 			DATA		: データ
 
 		インデックスの構造
-		[BEGIN][SIZE][PATH][DELIM] [BEGIN][SIZE]... [PATH][DELIM]
+		[BEGIN][SIZE][PATH_LENGTH][PATH][BEGIN][SIZE]...
 
-			BEGIN	: アーカイブ先頭からのオフセット (uintmax_t, 8 bytes)
-			SIZE	: ファイルサイズ (uintmax_t, 8 bytes)
-			PATH	: ファイルパス
-			DELIM	: デリミタ 0x1b (char, 1 bytes)
+			BEGIN		: アーカイブ先頭からのオフセット
+			SIZE		: ファイルサイズ
+			PATH_LENGTH	: ファイルパスの長さ
+			PATH		: ファイルパス
 	**************************************************************************/
 
 	out_stream.seekp(0, fs::ofstream::beg);
 
 	//****************************************************************************
 	// [SIGN]
-	out_stream.write("ARCH", 4);
+	std::string sign("ARCH");
+	out_stream.write(&sign.front(), sign.size());
 
 	//****************************************************************************
 	// [INDEX_SIZE]
-	const char delim = 0x1b;
-
-	uintmax_t indexSize = 0;
+	std::size_t indexSize = 0;
 	for(const auto& record : index_)
 	{
 		indexSize += sizeof(record.second);
 		indexSize += record.first.string().size();
-		indexSize += sizeof(delim);
 	}
 	out_stream.write(reinterpret_cast<const char*>(&indexSize), sizeof(indexSize));
 
 	//****************************************************************************
 	// [INDEX]
-	for(const auto& piece : index_)
-	{
-		out_stream.write(reinterpret_cast<const char*>(&piece.second), sizeof(piece.second));
+	std::size_t begin = sign.size() + indexSize + 4;
 
-		out_stream.write(reinterpret_cast<const char*>(piece.first.string().c_str()), piece.first.string().size());
-		
-		out_stream.write(reinterpret_cast<const char*>(&delim), sizeof(delim));
+	for(const auto& record : index_)
+	{
+		IndexItem buffer(record.first, begin);
+
+		out_stream.write(reinterpret_cast<const char*>(&buffer), sizeof(buffer));
+		out_stream.write(reinterpret_cast<const char*>(record.first.string().c_str()), record.first.string().size());
+
+		begin += record.second.fileSize_;
 	}
 
 	//****************************************************************************
 	// [DATA]
-	for(const auto& piece : index_)
+	for(const auto& record : index_)
 	{
-		uintmax_t fileSize = fs::file_size(piece.first);
+		std::size_t fileSize = record.second.fileSize_;
 
-		fs::ifstream in_stream(piece.first, std::ios_base::in | std::ios_base::binary);
+		fs::ifstream in_stream(record.first, std::ios_base::in | std::ios_base::binary);
 		if(in_stream.fail())
 		{
 			throw std::runtime_error("ファイルの書込みに失敗");
@@ -263,7 +255,7 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 			}
 			else if(wroteSize + buffer.size() > fileSize)
 			{
-				buffer.resize(fileSize - wroteSize);
+				buffer.resize(static_cast<unsigned int>(fileSize - wroteSize));
 			}
 
 			in_stream.read(&buffer.front(), buffer.size());
@@ -272,7 +264,7 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 	}
 }
 
-uintmax_t SimpleArchiver::GetFileSize(const fs::path& filePath) const
+std::size_t SimpleArchiver::GetFileSize(const fs::path& filePath) const
 {
 	assert(&filePath);
 
@@ -281,7 +273,7 @@ uintmax_t SimpleArchiver::GetFileSize(const fs::path& filePath) const
 		return index_.at(filePath.string()).fileSize_;
 	}
 
-	return fs::file_size(filePath);
+	return static_cast<std::size_t>(fs::file_size(filePath));
 }
 
 } // namespace archiver

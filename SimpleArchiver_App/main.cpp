@@ -9,12 +9,14 @@
 #include <iostream>
 #include <stdexcept>
 
+#include <boost/filesystem/fstream.hpp>
+
 /******************************************************************************
 	エントリポイント
 ******************************************************************************/
 int wmain(int argc, wchar_t* argv[])
 {
-	if(argc < 2 || argc > 3)
+	if(argc != 3)
 	{
 		std::wcout
 			<< std::endl
@@ -33,6 +35,13 @@ int wmain(int argc, wchar_t* argv[])
 	{
 		SimpleArchiver archiver(src);
 		archiver.WriteArchive(fs::path(dest));
+
+		SimpleArchiver archive(dest);
+		std::vector<char> data(archive.GetFileSize("C:\\Applications\\7-zip\\readme.txt"));
+		archive.ReadFile(&data.front(), "C:\\Applications\\7-zip\\readme.txt");
+
+		boost::filesystem::ofstream out_stream("C:\\Applications\\test.txt", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+ 		out_stream.write(&data.front(), data.size());
 	}
 	catch(const std::runtime_error& e)
 	{
