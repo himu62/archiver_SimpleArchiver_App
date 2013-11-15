@@ -3,6 +3,7 @@
 	File	: SimpleArchiver.hpp
 	Author	: himu62
 ******************************************************************************/
+#pragma once
 
 #include <map>
 #include <string>
