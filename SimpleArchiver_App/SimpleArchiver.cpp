@@ -111,19 +111,26 @@ std::map<fs::path, IndexItem> SearchFiles(const fs::path& srcPath)
 
 	if(!fs::is_directory(srcPath))
 	{
-		IndexItem item(srcPath, 0);
-		destIndex.insert(std::map<fs::path, IndexItem>::value_type(srcPath, item));
+		std::wstring buffer = srcPath.wstring();
+		buffer = buffer.substr(buffer.find_last_of(L'\\'));
+
+		IndexItem item(buffer, 0, static_cast<std::size_t>(fs::file_size(srcPath)));
+		destIndex.insert(std::map<fs::path, IndexItem>::value_type(buffer, item));
 	}
 	else
 	{
+		const auto baseLength = srcPath.wstring().size() + 1;
+
 		fs::recursive_directory_iterator end;
 		for(fs::recursive_directory_iterator i(srcPath); i != end; ++i)
 		{
 			const auto p = i->path();
 			if(!fs::is_directory(p))
 			{
-				IndexItem item(p, 0);
-				destIndex.insert(std::map<fs::path, IndexItem>::value_type(p, item));
+				std::wstring buffer = p.wstring().substr(baseLength);
+
+				IndexItem item(buffer, 0, static_cast<std::size_t>(fs::file_size(p)));
+				destIndex.insert(std::map<fs::path, IndexItem>::value_type(buffer, item));
 			}
 		}
 	}
@@ -137,7 +144,7 @@ std::map<fs::path, IndexItem> SearchFiles(const fs::path& srcPath)
 
 IndexItem::IndexItem(const fs::path& path, const std::size_t begin, const std::size_t filesize) :
 	begin_(begin),
-	fileSize_(filesize ? filesize : static_cast<std::size_t>(fs::file_size(path))),
+	fileSize_(filesize),
 	pathLength_(path.string().size())
 {}
 
@@ -223,8 +230,7 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 
 	//****************************************************************************
 	// [INDEX_SIZE]
-	// issue: インデックスサイズが4バイト足りない
-	std::size_t indexSize = 4;
+	std::size_t indexSize = 0;
 	for(const auto& record : index_)
 	{
 		indexSize += sizeof(record.second);
@@ -234,11 +240,11 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 
 	//****************************************************************************
 	// [INDEX]
-	std::size_t begin = sign.size() + indexSize;
+	std::size_t begin = sign.size() + sizeof(indexSize) + indexSize;
 
 	for(const auto& record : index_)
 	{
-		IndexItem buffer(record.first, begin);
+		IndexItem buffer(record.first, begin, record.second.fileSize_);
 
 		out_stream.write(reinterpret_cast<const char*>(&buffer), sizeof(buffer));
 		out_stream.write(reinterpret_cast<const char*>(record.first.string().c_str()), record.first.string().size());
@@ -252,7 +258,7 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 	{
 		std::size_t fileSize = record.second.fileSize_;
 
-		fs::ifstream in_stream(record.first, std::ios_base::in | std::ios_base::binary);
+		fs::ifstream in_stream(basePath_.wstring() + L'\\' + record.first.wstring(), std::ios_base::in | std::ios_base::binary);
 		if(in_stream.fail())
 		{
 			throw std::runtime_error("ファイルの書込みに失敗");
@@ -289,7 +295,7 @@ std::size_t SimpleArchiver::GetFileSize(const fs::path& filePath) const
 
 	if(!fs::exists(filePath))
 	{
-		return index_.at(filePath.string()).fileSize_;
+		return index_.at(filePath).fileSize_;
 	}
 
 	return static_cast<std::size_t>(fs::file_size(filePath));

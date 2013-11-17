@@ -34,14 +34,20 @@ int wmain(int argc, wchar_t* argv[])
 	try
 	{
 		SimpleArchiver archiver(src);
-		archiver.WriteArchive(fs::path(dest));
+		archiver.WriteArchive(dest);
 
 		SimpleArchiver archive(dest);
-		std::vector<char> data(archive.GetFileSize(src + L"\\readme.txt"));
-		archive.ReadFile(&data.front(), src + L"\\readme.txt");
+		std::vector<char> data(archive.GetFileSize(L"readme.txt"));
+		archive.ReadFile(&data.front(), L"readme.txt");
 
-		boost::filesystem::ofstream out_stream(dest.substr(0, dest.find(L'\\', 4)) + L"\\test.txt", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+		fs::ofstream out_stream(dest.substr(0, dest.find(L'\\', 4)) + L"\\test.txt", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
  		out_stream.write(&data.front(), data.size());
+
+		data.resize(archive.GetFileSize(L"7-zip.chm"));
+		archive.ReadFile(&data.front(), L"7-zip.chm");
+
+		fs::ofstream out_stream2(dest.substr(0, dest.find(L'\\', 4)) + L"\\test.chm", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
+		out_stream2.write(&data.front(), data.size());
 	}
 	catch(const std::runtime_error& e)
 	{
