@@ -49,7 +49,7 @@ int wmain(int argc, wchar_t* argv[])
 		fs::ofstream out_stream2(dest.substr(0, dest.find(L'\\', 4)) + L"\\test.chm", std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 		out_stream2.write(&data.front(), data.size());
 	}
-	catch(const std::runtime_error& e)
+	catch(const std::exception& e)
 	{
 		std::wcout << e.what() << std::endl;
 		rewind(stdin);

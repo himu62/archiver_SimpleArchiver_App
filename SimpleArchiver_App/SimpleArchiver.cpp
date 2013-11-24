@@ -23,8 +23,116 @@ namespace archiver
 ******************************************************************************/
 
 //*****************************************************************************
+// 文字列を分割する
+std::vector<std::wstring> SplitString(const std::wstring& src, const std::wstring& delim, const std::wstring& splitter = L"")
+{
+	using namespace std;
+
+	vector<wstring> dest;
+
+	wstring::size_type begin = 0;
+	auto next = src.find_first_of(delim, begin);
+
+	if(next == wstring::npos)
+	{
+		dest.push_back(src);
+	}
+	else
+	{
+		while(next != wstring::npos)
+		{
+			dest.push_back(src.substr(begin, next - begin));
+			begin = next + 1;
+			next = src.find_first_of(delim, begin);
+
+			if(!splitter.empty())
+			{
+				dest.push_back(splitter);
+			}
+		}
+
+		dest.push_back(src.substr(begin));
+	}
+
+	return dest;
+}
+
+//*****************************************************************************
+// パスを符号化する
+// first: 符号化参照, second: 符号化対象
+void EncodePath(std::vector<std::wstring>& first, std::vector<std::wstring>& second)
+{
+	for(
+		auto& it_first = first.begin(), it_second = second.begin();
+		it_first < first.end() && it_second < second.end();
+		++it_first, ++it_second
+		)
+	{
+		if(*it_first == *it_second)
+		{
+			*it_second = 0x1b;
+		}
+	}
+}
+
+//*****************************************************************************
+// パスを符号化する
+std::vector<IndexItem> EncodeIndex(const std::vector<IndexItem>& src)
+{
+	using namespace std;
+
+	vector<wstring> srcPaths;
+	for(const auto& record : src)
+	{
+		srcPaths.push_back(record.path_.wstring());
+	}
+
+	const wstring delim(1, 0x1b);
+	vector<vector<wstring>> pathPieces;
+	for(const auto& path : srcPaths)
+	{
+		pathPieces.push_back(SplitString(path, L"\\", delim));
+	}
+
+	for(auto& it = pathPieces.rbegin(); it < pathPieces.rend() - 1; ++it)
+	{
+		EncodePath(*(it + 1), *it);
+	}
+
+	vector<wstring> paths;
+	for(const auto& path : pathPieces)
+	{
+		std::wstring buffer;
+		buffer.clear();
+		for(const auto& piece : path)
+		{
+			buffer += piece;
+		}
+		paths.push_back(buffer);
+	}
+
+	vector<IndexItem> dest;
+	for(const auto& record : src)
+	{
+		IndexItem item(paths.front(), record.begin_, record.fileSize_);
+		paths.erase(paths.begin());
+		dest.push_back(item);
+	}
+
+	return dest;
+}
+
+//*****************************************************************************
+// パスを復号化する
+std::vector<IndexItem> DecodeIndex(const std::vector<IndexItem>& src)
+{
+	std::vector<IndexItem> dest;
+	return dest;
+}
+
+//*****************************************************************************
 // アーカイブを読み込み，ファイルインデックスを生成する(mapの鍵はパス，値はアーカイブ先頭からの位置)
-std::map<fs::path, IndexItem> ConvertIndex(const fs::path& archivePath)
+std::vector<IndexItem> ConvertIndex(const fs::path& archivePath)
 {
 	assert(&archivePath);
 
@@ -47,8 +155,8 @@ std::map<fs::path, IndexItem> ConvertIndex(const fs::path& archivePath)
 	std::size_t indexSize;
 	in_stream.read(reinterpret_cast<char*>(&indexSize), sizeof(indexSize));
 
-	std::map<fs::path, IndexItem> destIndex;
-	for(unsigned int readSize = 0; readSize < indexSize; )
+	std::vector<IndexItem> destIndex;
+	for(unsigned int readSize = 0; readSize < indexSize;)
 	{
 		std::size_t fileBegin;
 		in_stream.read(reinterpret_cast<char*>(&fileBegin), sizeof(fileBegin));
@@ -66,14 +174,12 @@ std::map<fs::path, IndexItem> ConvertIndex(const fs::path& archivePath)
 		in_stream.read(&pathBuffer.front(), pathLength);
 		readSize += pathLength;
 
-		const fs::path filePath(pathBuffer);
+		IndexItem item(pathBuffer, fileBegin, fileSize);
 
-		IndexItem item(filePath, fileBegin, fileSize);
+		destIndex.push_back(item);
+	}
 
-		destIndex.insert(std::map<fs::path, IndexItem>::value_type(filePath, item));
-	}	
-
-	return destIndex;
+	return DecodeIndex(destIndex);
 }
 
 //*****************************************************************************
@@ -103,39 +209,79 @@ bool IsArchive(const fs::path& srcPath)
 
 //*****************************************************************************
 // パス以下のファイルを探索してインデックスを生成する(サブディレクトリも探索)
-std::map<fs::path, IndexItem> SearchFiles(const fs::path& srcPath)
+void SearchFilesSubdir(const fs::path& srcPath, std::vector<IndexItem>& destIndex)
+{
+	assert(&srcPath);
+	assert(&destIndex);
+
+	const auto full_src_path = fs::absolute(srcPath);
+
+	fs::directory_iterator end;
+	for(fs::directory_iterator it(full_src_path); it != end; ++it)
+	{
+		if(fs::is_directory(fs::absolute(it->path())))
+		{
+			SearchFilesSubdir(srcPath / it->path().leaf(), destIndex);
+		}
+	}
+	for(fs::directory_iterator it(full_src_path); it != end; ++it)
+	{
+		const auto full_path = fs::absolute(it->path());
+
+		if(!fs::is_directory(full_path))
+		{
+			const auto buffer = srcPath / full_path.leaf();
+			IndexItem item(srcPath / full_path.leaf(), 0, static_cast<const size_t>(fs::file_size(full_path)));
+			destIndex.push_back(item);
+		}
+	}
+}
+
+//*****************************************************************************
+// パス以下のファイルを探索してインデックスを生成する(サブディレクトリも探索)
+std::vector<IndexItem> SearchFiles(const fs::path& srcPath)
 {
 	assert(&srcPath);
 
-	std::map<fs::path, IndexItem> destIndex;
+	std::vector<IndexItem> destIndex;
 
 	if(!fs::is_directory(srcPath))
 	{
-		std::wstring buffer = srcPath.wstring();
-		buffer = buffer.substr(buffer.find_last_of(L'\\'));
-
-		IndexItem item(buffer, 0, static_cast<std::size_t>(fs::file_size(srcPath)));
-		destIndex.insert(std::map<fs::path, IndexItem>::value_type(buffer, item));
+		IndexItem item(srcPath.leaf() , 0, static_cast<std::size_t>(fs::file_size(srcPath)));
+		destIndex.push_back(item);
 	}
 	else
 	{
-		const auto baseLength = srcPath.wstring().size() + 1;
+		const auto branch = srcPath.branch_path();
 
-		fs::recursive_directory_iterator end;
-		for(fs::recursive_directory_iterator i(srcPath); i != end; ++i)
+		fs::current_path(srcPath);
+
+		fs::directory_iterator end;
+		for(fs::directory_iterator it(srcPath); it != end; ++it)
 		{
-			const auto p = i->path();
-			if(!fs::is_directory(p))
-			{
-				std::wstring buffer = p.wstring().substr(baseLength);
+			const auto full_path = fs::absolute(it->path());
 
-				IndexItem item(buffer, 0, static_cast<std::size_t>(fs::file_size(p)));
-				destIndex.insert(std::map<fs::path, IndexItem>::value_type(buffer, item));
+			if(fs::is_directory(full_path))
+			{
+				SearchFilesSubdir(it->path().leaf(), destIndex);
+			}
+		}
+
+		fs::current_path(srcPath.branch_path());
+
+		for(fs::directory_iterator it(srcPath); it != end; ++it)
+		{
+			const auto full_path = fs::absolute(it->path());
+
+			if(!fs::is_directory(full_path))
+			{
+				IndexItem item(full_path.leaf(), 0, static_cast<const size_t>(fs::file_size(full_path)));
+				destIndex.push_back(item);
 			}
 		}
 	}
 
-	return destIndex;
+	return EncodeIndex(destIndex);
 }
 
 /******************************************************************************
@@ -143,10 +289,23 @@ std::map<fs::path, IndexItem> SearchFiles(const fs::path& srcPath)
 ******************************************************************************/
 
 IndexItem::IndexItem(const fs::path& path, const std::size_t begin, const std::size_t filesize) :
+	path_(path),
 	begin_(begin),
 	fileSize_(filesize),
 	pathLength_(path.string().size())
 {}
+
+bool IndexItem::operator!()
+{
+	if(path_.empty())
+	{
+		return true;
+	}
+	else
+	{
+		return false;
+	}
+}
 
 /******************************************************************************
 	SimpleArchiver
@@ -175,13 +334,13 @@ void SimpleArchiver::ReadFile(char* dest, const fs::path& filePath) const
 		throw std::runtime_error("アーカイブの読み込みに失敗");
 	}
 
-	if(!index_.count(filePath))
+	if(!GetItem(filePath))
 	{
 		std::wcout << L"ファイルが見つからない" << std::endl;
 		return;
 	}
 
-	IndexItem item = index_.at(filePath.string());
+	IndexItem item = GetItem(filePath);
 
 	in_stream.seekg(item.begin_, fs::ifstream::beg);
 	in_stream.read(dest, item.fileSize_);
@@ -233,8 +392,7 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 	std::size_t indexSize = 0;
 	for(const auto& record : index_)
 	{
-		indexSize += sizeof(record.second);
-		indexSize += record.second.pathLength_;
+		indexSize += sizeof(record);
 	}
 	out_stream.write(reinterpret_cast<const char*>(&indexSize), sizeof(indexSize));
 
@@ -244,21 +402,21 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 
 	for(const auto& record : index_)
 	{
-		IndexItem buffer(record.first, begin, record.second.fileSize_);
+		IndexItem buffer(record.path_, begin, record.fileSize_);
 
 		out_stream.write(reinterpret_cast<const char*>(&buffer), sizeof(buffer));
-		out_stream.write(reinterpret_cast<const char*>(record.first.string().c_str()), record.first.string().size());
+		out_stream.write(reinterpret_cast<const char*>(record.path_.string().c_str()), record.pathLength_);
 
-		begin += record.second.fileSize_;
+		begin += record.fileSize_;
 	}
 
 	//****************************************************************************
 	// [DATA]
 	for(const auto& record : index_)
 	{
-		std::size_t fileSize = record.second.fileSize_;
+		std::size_t fileSize = record.fileSize_;
 
-		fs::ifstream in_stream(basePath_.wstring() + L'\\' + record.first.wstring(), std::ios_base::in | std::ios_base::binary);
+		fs::ifstream in_stream(basePath_.wstring() + L'\\' + record.path_.wstring(), std::ios_base::in | std::ios_base::binary);
 		if(in_stream.fail())
 		{
 			throw std::runtime_error("ファイルの書込みに失敗");
@@ -295,10 +453,23 @@ std::size_t SimpleArchiver::GetFileSize(const fs::path& filePath) const
 
 	if(!fs::exists(filePath))
 	{
-		return index_.at(filePath).fileSize_;
+		return GetItem(filePath).fileSize_;
 	}
 
 	return static_cast<std::size_t>(fs::file_size(filePath));
+}
+
+IndexItem SimpleArchiver::GetItem(const boost::filesystem::path& filePath) const
+{
+	for(const auto& item : index_)
+	{
+		if(item.path_ == filePath)
+		{
+			return item;
+		}
+	}
+
+	return IndexItem(L"");
 }
 
 } // namespace archiver

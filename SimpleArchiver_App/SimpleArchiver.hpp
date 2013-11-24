@@ -24,6 +24,10 @@ struct IndexItem
 {
 	explicit IndexItem(const boost::filesystem::path& path, const std::size_t begin = 0, const std::size_t filesize = 0);
 
+	// パスが存在するか
+	bool operator!();
+
+	const boost::filesystem::path path_;
 	const std::size_t begin_;
 	const std::size_t fileSize_;
 	const unsigned int pathLength_;
@@ -48,10 +52,13 @@ public:
 	// アーカイブまたはディスク上のファイルのファイルサイズを取得する
 	std::size_t GetFileSize(const boost::filesystem::path& filePath) const;
 
+	// パスからインデックス情報を取得する
+	IndexItem GetItem(const boost::filesystem::path& filePath) const;
+
 private:
 	const bool isArchive_;
 	const boost::filesystem::path basePath_;
-	const std::map<boost::filesystem::path, IndexItem> index_;
+	const std::vector<IndexItem> index_;
 };
 
 } // namespace archiver
