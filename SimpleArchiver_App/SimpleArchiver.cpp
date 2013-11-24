@@ -45,6 +45,11 @@ std::vector<std::wstring> SplitString(const std::wstring& src, const std::wstrin
 			begin = next + 1;
 			next = src.find_first_of(delim, begin);
 
+			if(dest.back().empty())
+			{
+				dest.pop_back();
+			}
+
 			if(!splitter.empty())
 			{
 				dest.push_back(splitter);
@@ -126,12 +131,77 @@ std::vector<IndexItem> EncodeIndex(const std::vector<IndexItem>& src)
 // パスを復号化する
 std::vector<IndexItem> DecodeIndex(const std::vector<IndexItem>& src)
 {
-	std::vector<IndexItem> dest;
+	using namespace std;
+
+	wstring delim(1, 0x1b);
+
+	vector<vector<wstring>> paths;
+	for(const auto& path : src)
+	{
+		paths.push_back(SplitString(path.path_.wstring(), delim, delim));
+	}
+
+	for(auto& path : paths)
+	{
+		for(auto& piece : path)
+		{
+			if(piece == delim)
+			{
+				piece = L"//";
+			}
+		}
+	}
+
+	delim = L"//";
+
+	for(auto& it_paths = paths.begin() + 1; it_paths != paths.end(); ++it_paths)
+	{
+		for(
+			auto& it_pieces = it_paths->begin(), before_it = (it_paths - 1)->begin();
+			it_pieces < it_paths->end() && before_it < (it_paths - 1)->end();
+			++it_pieces, ++before_it
+			)
+		{
+			if(*it_pieces == delim)
+			{
+				*it_pieces = *before_it;
+			}
+		}
+	}
+
+	vector<wstring> correct_paths;
+	for(const auto& path : paths)
+	{
+		wstring buffer;
+		buffer.clear();
+
+		for(const auto& piece : path)
+		{
+			buffer += piece;
+		}
+
+		correct_paths.push_back(buffer);
+	}
+
+	auto& it_paths	= correct_paths.begin();
+	auto& it_src	= src.begin();
+
+	vector<IndexItem> dest;
+	for(
+		;
+		it_paths < correct_paths.end() && it_src < src.end();
+		++it_paths, ++it_src
+		)
+	{
+		IndexItem item(fs::path(*it_paths), it_src->begin_, it_src->fileSize_);
+		dest.push_back(item);
+	}
+
 	return dest;
 }
 
 //*****************************************************************************
-// アーカイブを読み込み，ファイルインデックスを生成する(mapの鍵はパス，値はアーカイブ先頭からの位置)
+// アーカイブを読み込み，ファイルインデックスを生成する
 std::vector<IndexItem> ConvertIndex(const fs::path& archivePath)
 {
 	assert(&archivePath);
@@ -281,7 +351,7 @@ std::vector<IndexItem> SearchFiles(const fs::path& srcPath)
 		}
 	}
 
-	return EncodeIndex(destIndex);
+	return destIndex;
 }
 
 /******************************************************************************
@@ -380,6 +450,8 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 			PATH		: ファイルパス
 	**************************************************************************/
 
+	const auto encoded_index = EncodeIndex(index_);
+
 	out_stream.seekp(0, fs::ofstream::beg);
 
 	//****************************************************************************
@@ -390,9 +462,12 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 	//****************************************************************************
 	// [INDEX_SIZE]
 	std::size_t indexSize = 0;
-	for(const auto& record : index_)
+	for(const auto& record : encoded_index)
 	{
-		indexSize += sizeof(record);
+		indexSize += sizeof(record.begin_);
+		indexSize += sizeof(record.fileSize_);
+		indexSize += sizeof(record.pathLength_);
+		indexSize += record.pathLength_;
 	}
 	out_stream.write(reinterpret_cast<const char*>(&indexSize), sizeof(indexSize));
 
@@ -400,11 +475,13 @@ void SimpleArchiver::WriteArchive(const fs::path& destPath) const
 	// [INDEX]
 	std::size_t begin = sign.size() + sizeof(indexSize) + indexSize;
 
-	for(const auto& record : index_)
+	for(const auto& record : encoded_index)
 	{
 		IndexItem buffer(record.path_, begin, record.fileSize_);
 
-		out_stream.write(reinterpret_cast<const char*>(&buffer), sizeof(buffer));
+		out_stream.write(reinterpret_cast<const char*>(&buffer.begin_), sizeof(buffer.begin_));
+		out_stream.write(reinterpret_cast<const char*>(&buffer.fileSize_), sizeof(buffer.fileSize_));
+		out_stream.write(reinterpret_cast<const char*>(&buffer.pathLength_), sizeof(buffer.pathLength_));
 		out_stream.write(reinterpret_cast<const char*>(record.path_.string().c_str()), record.pathLength_);
 
 		begin += record.fileSize_;
